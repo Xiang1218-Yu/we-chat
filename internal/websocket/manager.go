@@ -12,7 +12,6 @@ import (
 	"we-chat/internal/repository"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -116,7 +115,7 @@ func (m *WebSocketManager) HandleWebSocket(c *gin.Context) {
 	}
 
 	client := &Client{
-		ID:       uuid.NewString(),
+		ID:       userID,
 		UserID:   userID,
 		Username: username,
 		Conn:     conn,
