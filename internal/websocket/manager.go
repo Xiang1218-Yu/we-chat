@@ -12,6 +12,7 @@ import (
 	"we-chat/internal/repository"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -34,23 +35,22 @@ type Client struct {
 }
 
 type WebSocketManager struct {
-	clients    map[string]*Client
-	register   chan *Client
-	unregister chan *Client
-	broadcast  chan []byte
-	mu         sync.RWMutex
-	mongoRepo  *repository.MongoDBRepository
-	redisRepo  *repository.RedisRepository
+	connections *connectionRegistry
+	register    chan *Client
+	unregister  chan *Client
+	broadcast   chan []byte
+	mongoRepo   *repository.MongoDBRepository
+	redisRepo   *repository.RedisRepository
 }
 
 func NewWebSocketManager(mongoRepo *repository.MongoDBRepository, redisRepo *repository.RedisRepository) *WebSocketManager {
 	return &WebSocketManager{
-		clients:    make(map[string]*Client),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		broadcast:  make(chan []byte, 100),
-		mongoRepo:  mongoRepo,
-		redisRepo:  redisRepo,
+		connections: newConnectionRegistry(),
+		register:    make(chan *Client),
+		unregister:  make(chan *Client),
+		broadcast:   make(chan []byte, 100),
+		mongoRepo:   mongoRepo,
+		redisRepo:   redisRepo,
 	}
 }
 
@@ -61,39 +61,38 @@ func (m *WebSocketManager) Run() {
 	for {
 		select {
 		case client := <-m.register:
-			m.mu.Lock()
-			m.clients[client.ID] = client
-			m.mu.Unlock()
-
-			m.redisRepo.SetUserOnline(context.Background(), client.UserID)
+			firstConnection := m.connections.Add(client)
+			if firstConnection {
+				m.redisRepo.SetUserOnline(context.Background(), client.UserID)
+			}
 			m.redisRepo.SetUserSession(context.Background(), client.UserID, client.ID, 24*time.Hour)
-
 			m.notifyOnlineUsers()
 
 		case client := <-m.unregister:
-			m.mu.Lock()
-			if _, ok := m.clients[client.ID]; ok {
-				delete(m.clients, client.ID)
+			removed, lastConnection := m.connections.Remove(client.ID)
+			if removed {
 				close(client.Send)
 			}
-			m.mu.Unlock()
-
-			m.redisRepo.SetUserOffline(context.Background(), client.UserID)
-			m.redisRepo.DeleteUserSession(context.Background(), client.UserID)
-
+			if lastConnection {
+				m.redisRepo.SetUserOffline(context.Background(), client.UserID)
+				m.redisRepo.DeleteUserSession(context.Background(), client.UserID)
+			}
 			m.notifyOnlineUsers()
 
 		case message := <-m.broadcast:
-			m.mu.RLock()
-			for _, client := range m.clients {
+			for _, client := range m.connections.All() {
 				select {
 				case client.Send <- message:
 				default:
-					close(client.Send)
-					delete(m.clients, client.ID)
+					if removed, lastConnection := m.connections.Remove(client.ID); removed {
+						close(client.Send)
+						if lastConnection {
+							m.redisRepo.SetUserOffline(context.Background(), client.UserID)
+							m.redisRepo.DeleteUserSession(context.Background(), client.UserID)
+						}
+					}
 				}
 			}
-			m.mu.RUnlock()
 
 		case <-ticker.C:
 			m.checkHeartbeats()
@@ -117,7 +116,7 @@ func (m *WebSocketManager) HandleWebSocket(c *gin.Context) {
 	}
 
 	client := &Client{
-		ID:       userID,
+		ID:       uuid.NewString(),
 		UserID:   userID,
 		Username: username,
 		Conn:     conn,
@@ -368,11 +367,11 @@ func (m *WebSocketManager) handleReaction(ctx context.Context, wsMsg models.WebS
 func (m *WebSocketManager) broadcastToRoom(roomID string, message *models.WebSocketMessage) {
 	data, _ := json.Marshal(message)
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, client := range m.clients {
-		if _, ok := client.Rooms[roomID]; ok {
+	for _, client := range m.connections.All() {
+		client.mu.Lock()
+		_, joined := client.Rooms[roomID]
+		client.mu.Unlock()
+		if joined {
 			select {
 			case client.Send <- data:
 			default:
@@ -384,16 +383,10 @@ func (m *WebSocketManager) broadcastToRoom(roomID string, message *models.WebSoc
 func (m *WebSocketManager) sendToUser(userID string, message *models.WebSocketMessage) {
 	data, _ := json.Marshal(message)
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, client := range m.clients {
-		if client.UserID == userID {
-			select {
-			case client.Send <- data:
-			default:
-			}
-			return
+	for _, client := range m.connections.ForUser(userID) {
+		select {
+		case client.Send <- data:
+		default:
 		}
 	}
 }
@@ -432,10 +425,7 @@ func (m *WebSocketManager) notifyOnlineUsers() {
 
 func (m *WebSocketManager) checkHeartbeats() {
 	ctx := context.Background()
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, client := range m.clients {
+	for _, client := range m.connections.All() {
 		if ok, _ := m.redisRepo.CheckHeartbeat(ctx, client.UserID); !ok {
 			m.unregister <- client
 		}
@@ -443,12 +433,5 @@ func (m *WebSocketManager) checkHeartbeats() {
 }
 
 func (m *WebSocketManager) GetOnlineUsers() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	users := make([]string, 0, len(m.clients))
-	for _, client := range m.clients {
-		users = append(users, client.Username)
-	}
-	return users
+	return m.connections.Usernames()
 }
