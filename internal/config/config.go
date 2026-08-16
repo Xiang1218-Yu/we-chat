@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	MongoDB   MongoDBConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Upload    UploadConfig
+	Server  ServerConfig
+	MongoDB MongoDBConfig
+	Redis   RedisConfig
+	JWT     JWTConfig
+	Upload  UploadConfig
 }
 
 type ServerConfig struct {
@@ -38,8 +38,9 @@ type JWTConfig struct {
 }
 
 type UploadConfig struct {
-	Path       string
-	MaxSize    int64
+	Path              string
+	MaxSize           int64
+	AllowedImageTypes []string
 }
 
 var AppConfig *Config
@@ -68,8 +69,9 @@ func LoadConfig() {
 			ExpireHours: getEnvAsInt("JWT_EXPIRE_HOURS", 24),
 		},
 		Upload: UploadConfig{
-			Path:    getEnv("UPLOAD_PATH", "./uploads"),
-			MaxSize: getEnvAsInt64("MAX_UPLOAD_SIZE", 10485760),
+			Path:              getEnv("UPLOAD_PATH", "./uploads"),
+			MaxSize:           getEnvAsInt64("MAX_UPLOAD_SIZE", 10485760),
+			AllowedImageTypes: []string{"image/jpeg", "image/png", "image/gif"},
 		},
 	}
 }

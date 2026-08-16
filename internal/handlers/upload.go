@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"we-chat/internal/config"
+	"we-chat/internal/filetype"
 	"we-chat/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -90,13 +91,23 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	filename := time.Now().Format("20060102") + "_" + uuid.New().String() + ext
 	filePath := filepath.Join(imagePath, filename)
 
-	// 保存文件
+	// 保存前读取文件头并按实际内容校验，不能只相信客户端声明的 Content-Type。
 	src, err := file.Open()
 	if err != nil {
 		response.InternalError(c, "Failed to open file")
 		return
 	}
 	defer src.Close()
+
+	actualType, err := filetype.DetectImageContentType(src)
+	if err != nil {
+		response.InternalError(c, "Failed to read image")
+		return
+	}
+	if !filetype.AllowedImageType(actualType, config.AppConfig.Upload.AllowedImageTypes) {
+		response.BadRequest(c, "Invalid image format")
+		return
+	}
 
 	dst, err := os.Create(filePath)
 	if err != nil {
