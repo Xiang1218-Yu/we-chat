@@ -9,11 +9,11 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	MongoDB   MongoDBConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Upload    UploadConfig
+	Server  ServerConfig
+	MongoDB MongoDBConfig
+	Redis   RedisConfig
+	JWT     JWTConfig
+	Upload  UploadConfig
 }
 
 type ServerConfig struct {
@@ -35,11 +35,12 @@ type RedisConfig struct {
 type JWTConfig struct {
 	Secret      string
 	ExpireHours int
+	Algorithm   string
 }
 
 type UploadConfig struct {
-	Path       string
-	MaxSize    int64
+	Path    string
+	MaxSize int64
 }
 
 var AppConfig *Config
@@ -66,6 +67,7 @@ func LoadConfig() {
 		JWT: JWTConfig{
 			Secret:      getEnv("JWT_SECRET", "your-secret-key"),
 			ExpireHours: getEnvAsInt("JWT_EXPIRE_HOURS", 24),
+			Algorithm:   getEnv("JWT_ALGORITHM", "HS256"),
 		},
 		Upload: UploadConfig{
 			Path:    getEnv("UPLOAD_PATH", "./uploads"),
