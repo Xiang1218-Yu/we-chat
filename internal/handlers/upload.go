@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -65,7 +67,7 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 		return
 	}
 
-	// 检查文件类型
+	// 检查文件类型（仅作初步参考，真实类型由内容魔数判定）
 	contentType := file.Header.Get("Content-Type")
 	if contentType != "image/jpeg" && contentType != "image/png" && contentType != "image/gif" {
 		response.BadRequest(c, "Invalid image format")
@@ -98,6 +100,20 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	}
 	defer src.Close()
 
+	// 校验真实图片内容：读取头部魔数，拒绝伪装成图片的非图片文件。
+	// 仅信任文件内容本身，而非客户端声明的 Content-Type 或扩展名。
+	head := make([]byte, 512)
+	n, err := io.ReadFull(src, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		response.BadRequest(c, "Invalid image format")
+		return
+	}
+	head = head[:n]
+	if !isImageByMagic(head) {
+		response.BadRequest(c, "Invalid image format")
+		return
+	}
+
 	dst, err := os.Create(filePath)
 	if err != nil {
 		response.InternalError(c, "Failed to create file")
@@ -105,6 +121,11 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	}
 	defer dst.Close()
 
+	// 先写入已读取的头部，再写入剩余内容
+	if _, err := dst.Write(head); err != nil {
+		response.BadRequest(c, "Invalid image format")
+		return
+	}
 	if _, err := io.Copy(dst, src); err != nil {
 		response.InternalError(c, "Failed to save file")
 		return
@@ -116,4 +137,25 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 		"filename": file.Filename,
 		"size":     file.Size,
 	})
+}
+
+// magicHeaders 是受支持的图片格式的文件签名（魔数）。
+// 匹配任一前缀即认为文件为对应类型的真实图片。
+var magicHeaders = [][]byte{
+	{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}, // PNG: \x89PNG\r\n\x1A\n
+	{0xFF, 0xD8, 0xFF},                               // JPEG: SOI marker
+	{0x47, 0x49, 0x46, 0x38, 0x37, 0x61},             // GIF87a
+	{0x47, 0x49, 0x46, 0x38, 0x39, 0x61},             // GIF89a
+}
+
+// isImageByMagic 通过文件头部字节判断是否为受支持的真实图片。
+// 仅依据文件内容本身判定，不信任客户端声明的 Content-Type 或扩展名，
+// 从而拒绝伪装成 PNG/JPEG/GIF 的非图片文件。
+func isImageByMagic(head []byte) bool {
+	for _, magic := range magicHeaders {
+		if bytes.HasPrefix(head, magic) {
+			return true
+		}
+	}
+	return false
 }
