@@ -222,7 +222,7 @@ func (r *RedisRepository) ReleaseOfflineMessage(ctx context.Context, userID, cla
 		return err
 	}
 	pipe := r.client.TxPipeline()
-	pipe.RPush(ctx, "offline_messages:"+userID, raw)
+	pipe.LPush(ctx, "offline_messages:"+userID, raw)
 	pipe.Del(ctx, claimKey)
 	_, err = pipe.Exec(ctx)
 	return err
