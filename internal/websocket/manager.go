@@ -12,6 +12,7 @@ import (
 	"we-chat/internal/repository"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -114,8 +115,11 @@ func (m *WebSocketManager) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
+	// Each browser tab gets its own unique connection ID so several tabs for
+	// the same user never overwrite one another in the registry. UserID still
+	// identifies the user, so messages fan out to every open tab.
 	client := &Client{
-		ID:       userID,
+		ID:       uuid.New().String(),
 		UserID:   userID,
 		Username: username,
 		Conn:     conn,
