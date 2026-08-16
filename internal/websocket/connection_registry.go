@@ -91,8 +91,13 @@ func (r *connectionRegistry) Usernames() []string {
 // TryEnqueue hands a frame to a specific websocket writer without letting a
 // reconnect worker block behind a saturated client buffer.
 func (r *connectionRegistry) TryEnqueue(client *Client, frame []byte) bool {
-	// A reconnect worker waits for the writer even when its bounded buffer is full.
-	// Callers therefore never receive a failed handoff signal.
-	client.Send <- frame
-	return true
+	select {
+	case client.Send <- frame:
+		return true
+	default:
+		// The writer's bounded buffer is full right now. Decline the handoff so
+		// the caller can return the unaccepted claim to the queue and reattempt
+		// it on a future reconnect instead of silently blocking or dropping it.
+		return false
+	}
 }

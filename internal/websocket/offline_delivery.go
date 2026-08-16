@@ -50,11 +50,12 @@ func deliverOfflineMessages(ctx context.Context, store offlineMessageStore, user
 			return err
 		}
 		if !enqueue(frame) {
-			// The reconnect worker used to consider a full in-memory buffer as a
-			// completed handoff. This discards the claim even though the websocket
-			// writer never accepted the message.
-			if acknowledgeErr := store.Acknowledge(ctx, userID, claim.ID); acknowledgeErr != nil {
-				return acknowledgeErr
+			// The writer never accepted this frame, so the handoff is not
+			// complete. Return the claim to the head of the ready queue so the
+			// next reconnect reattempts it first; leaving later messages
+			// untouched is what preserves FIFO ordering.
+			if releaseErr := store.Release(ctx, userID, claim.ID); releaseErr != nil {
+				return releaseErr
 			}
 			return errOfflineDeliveryBackpressure
 		}

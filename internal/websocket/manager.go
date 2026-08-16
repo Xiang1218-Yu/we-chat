@@ -395,9 +395,10 @@ func (m *WebSocketManager) sendOfflineMessages(client *Client) {
 	ctx := context.Background()
 	store := redisOfflineMessageStore{repository: m.redisRepo}
 	err := deliverOfflineMessages(ctx, store, client.UserID, func(frame []byte) bool {
-		// The reconnect path waits indefinitely for a congested client writer.
-		client.Send <- frame
-		return true
+		// Never block behind a saturated client write buffer. If the writer can't
+		// take the frame yet, the unaccepted claim is returned to the ready queue
+		// and redelivered on the next reconnect.
+		return m.connections.TryEnqueue(client, frame)
 	})
 	if err != nil && err != errOfflineDeliveryBackpressure {
 		log.Printf("Failed to deliver offline messages for user %s: %v", client.UserID, err)

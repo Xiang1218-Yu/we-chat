@@ -210,8 +210,11 @@ func (r *RedisRepository) AcknowledgeOfflineMessage(ctx context.Context, userID,
 	return r.client.Del(ctx, "offline_message_claim:"+userID+":"+claimID).Err()
 }
 
-// ReleaseOfflineMessage returns an unaccepted claim to the front of its queue,
-// preserving the original ordering for the next reconnect attempt.
+// ReleaseOfflineMessage returns an unaccepted claim to the head of its queue,
+// preserving the original ordering for the next reconnect attempt. Claims are
+// taken from the head (LPop in ClaimOfflineMessage), so they must be returned
+// to the head (LPush) — pushing to the tail would requeue the message behind
+// newer entries and reorder delivery.
 func (r *RedisRepository) ReleaseOfflineMessage(ctx context.Context, userID, claimID string) error {
 	claimKey := "offline_message_claim:" + userID + ":" + claimID
 	raw, err := r.client.Get(ctx, claimKey).Result()
@@ -222,7 +225,7 @@ func (r *RedisRepository) ReleaseOfflineMessage(ctx context.Context, userID, cla
 		return err
 	}
 	pipe := r.client.TxPipeline()
-	pipe.RPush(ctx, "offline_messages:"+userID, raw)
+	pipe.LPush(ctx, "offline_messages:"+userID, raw)
 	pipe.Del(ctx, claimKey)
 	_, err = pipe.Exec(ctx)
 	return err
