@@ -9,11 +9,12 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	MongoDB   MongoDBConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Upload    UploadConfig
+	Server  ServerConfig
+	MongoDB MongoDBConfig
+	Redis   RedisConfig
+	JWT     JWTConfig
+	Upload  UploadConfig
+	CORS    CORSConfig
 }
 
 type ServerConfig struct {
@@ -38,8 +39,12 @@ type JWTConfig struct {
 }
 
 type UploadConfig struct {
-	Path       string
-	MaxSize    int64
+	Path    string
+	MaxSize int64
+}
+
+type CORSConfig struct {
+	AllowedOrigins string
 }
 
 var AppConfig *Config
@@ -70,6 +75,9 @@ func LoadConfig() {
 		Upload: UploadConfig{
 			Path:    getEnv("UPLOAD_PATH", "./uploads"),
 			MaxSize: getEnvAsInt64("MAX_UPLOAD_SIZE", 10485760),
+		},
+		CORS: CORSConfig{
+			AllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 		},
 	}
 }
