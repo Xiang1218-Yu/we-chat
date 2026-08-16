@@ -9,6 +9,7 @@ import (
 	"we-chat/internal/models"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/google/uuid"
 )
 
 type RedisRepository struct {
@@ -172,4 +173,57 @@ func (r *RedisRepository) CheckHeartbeat(ctx context.Context, userID string) (bo
 
 func (r *RedisRepository) Close() error {
 	return r.client.Close()
+}
+
+// ClaimOfflineMessage removes the oldest queued offline message and stores it in
+// a short-lived claim key until the websocket writer acknowledges it. The claim
+// prevents a full client-side send buffer from silently discarding the message.
+func (r *RedisRepository) ClaimOfflineMessage(ctx context.Context, userID string) (string, *models.Message, error) {
+	queueKey := "offline_messages:" + userID
+	raw, err := r.client.LPop(ctx, queueKey).Result()
+	if err == redis.Nil {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+
+	var message models.Message
+	if err := json.Unmarshal([]byte(raw), &message); err != nil {
+		// Keep malformed data observable instead of treating the queue as empty.
+		r.client.LPush(ctx, queueKey, raw)
+		return "", nil, err
+	}
+
+	claimID := uuid.NewString()
+	claimKey := "offline_message_claim:" + userID + ":" + claimID
+	if err := r.client.Set(ctx, claimKey, raw, 5*time.Minute).Err(); err != nil {
+		r.client.LPush(ctx, queueKey, raw)
+		return "", nil, err
+	}
+	return claimID, &message, nil
+}
+
+// AcknowledgeOfflineMessage permanently removes a claim after a websocket
+// writer accepted its frame.
+func (r *RedisRepository) AcknowledgeOfflineMessage(ctx context.Context, userID, claimID string) error {
+	return r.client.Del(ctx, "offline_message_claim:"+userID+":"+claimID).Err()
+}
+
+// ReleaseOfflineMessage returns an unaccepted claim to the front of its queue,
+// preserving the original ordering for the next reconnect attempt.
+func (r *RedisRepository) ReleaseOfflineMessage(ctx context.Context, userID, claimID string) error {
+	claimKey := "offline_message_claim:" + userID + ":" + claimID
+	raw, err := r.client.Get(ctx, claimKey).Result()
+	if err == redis.Nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	pipe := r.client.TxPipeline()
+	pipe.RPush(ctx, "offline_messages:"+userID, raw)
+	pipe.Del(ctx, claimKey)
+	_, err = pipe.Exec(ctx)
+	return err
 }

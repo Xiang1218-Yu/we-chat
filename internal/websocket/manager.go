@@ -393,19 +393,14 @@ func (m *WebSocketManager) sendToUser(userID string, message *models.WebSocketMe
 
 func (m *WebSocketManager) sendOfflineMessages(client *Client) {
 	ctx := context.Background()
-	messages, err := m.redisRepo.GetOfflineMessages(ctx, client.UserID)
-	if err != nil {
-		return
-	}
-
-	for _, msg := range messages {
-		wsMsg := models.WebSocketMessage{
-			Type:      models.WSMessageTypePrivate,
-			Data:      msg,
-			Timestamp: time.Now(),
-		}
-		data, _ := json.Marshal(wsMsg)
-		client.Send <- data
+	store := redisOfflineMessageStore{repository: m.redisRepo}
+	err := deliverOfflineMessages(ctx, store, client.UserID, func(frame []byte) bool {
+		// The reconnect path waits indefinitely for a congested client writer.
+		client.Send <- frame
+		return true
+	})
+	if err != nil && err != errOfflineDeliveryBackpressure {
+		log.Printf("Failed to deliver offline messages for user %s: %v", client.UserID, err)
 	}
 }
 
